@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gorilla/mux"
 	"github.com/olivere/elastic"
 	"github.com/pborman/uuid"
 	"io"
@@ -54,10 +55,12 @@ type Post struct {
 
 func main() {
 	fmt.Println("started-service")
-	http.HandleFunc("/post", handlerPost)
-	http.HandleFunc("/search", handlerSearch)
-	http.HandleFunc("/cluster", handlerCluster)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	r := mux.NewRouter()
+	r.Handle("/post", http.HandlerFunc(handlerPost)).Methods("POST", "OPTIONS")
+	r.Handle("/search", http.HandlerFunc(handlerSearch)).Methods("GET", "OPTIONS")
+	r.Handle("/cluster", http.HandlerFunc(handlerCluster)).Methods("GET", "OPTIONS")
+
+	log.Fatal(http.ListenAndServe(":8080", r))
 }
 
 func handlerPost(w http.ResponseWriter, r *http.Request) {
