@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	jwtmiddleware "github.com/auth0/go-jwt-middleware"
+	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
 	"github.com/olivere/elastic"
 	"github.com/pborman/uuid"
@@ -55,10 +57,20 @@ type Post struct {
 
 func main() {
 	fmt.Println("started-service")
+
+	jwtMiddleware := jwtmiddleware.New(jwtmiddleware.Options{
+		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
+			return []byte(mySigningKey), nil
+		},
+		SigningMethod: jwt.SigningMethodHS256,
+	})
+
 	r := mux.NewRouter()
-	r.Handle("/post", http.HandlerFunc(handlerPost)).Methods("POST", "OPTIONS")
-	r.Handle("/search", http.HandlerFunc(handlerSearch)).Methods("GET", "OPTIONS")
-	r.Handle("/cluster", http.HandlerFunc(handlerCluster)).Methods("GET", "OPTIONS")
+	r.Handle("/post", jwtMiddleware.Handler(http.HandlerFunc(handlerPost))).Methods("POST", "OPTIONS")
+	r.Handle("/search", jwtMiddleware.Handler(http.HandlerFunc(handlerSearch))).Methods("GET", "OPTIONS")
+	r.Handle("/cluster", jwtMiddleware.Handler(http.HandlerFunc(handlerCluster))).Methods("GET", "OPTIONS")
+	r.Handle("/signup", http.HandlerFunc(handlerSignup)).Methods("POST", "OPTIONS")
+	r.Handle("/login", http.HandlerFunc(handlerLogin)).Methods("POST", "OPTIONS")
 
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
@@ -68,13 +80,22 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Received one post request")
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	user := r.Context().Value("user")
+	claims := user.(*jwt.Token).Claims
+	username := claims.(jwt.MapClaims)["username"]
 	//Read parameter from client
 	lat, _ := strconv.ParseFloat(r.FormValue("lat"), 64)
 	lon, _ := strconv.ParseFloat(r.FormValue("lon"), 64)
 
 	p := &Post{
-		User:    r.FormValue("user"),
+		User:    username.(string),
 		Message: r.FormValue("message"),
 		Location: Location{
 			Lat: lat,
@@ -130,6 +151,12 @@ func handlerSearch(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Received one request for search")
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+
+	if r.Method == "OPTIONS" {
+		return
+	}
 
 	lat, _ := strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
 	lon, _ := strconv.ParseFloat(r.URL.Query().Get("lon"), 64)
@@ -164,6 +191,12 @@ func handlerSearch(w http.ResponseWriter, r *http.Request) {
 func handlerCluster(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Received one cluster request")
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+
+	if r.Method == "OPTIONS" {
+		return
+	}
 
 	term := r.URL.Query().Get("term")
 	query := elastic.NewRangeQuery(term).Gte(0.9)
@@ -247,7 +280,7 @@ func saveToGCS(r io.Reader, objectName string) (string, error) {
 	return attrs.MediaLink, nil
 }
 
-func saveToES(post *Post, index string, id string) error {
+func saveToES(i interface{}, index string, id string) error {
 	client, err := elastic.NewClient(elastic.SetURL(ES_URL))
 	if err != nil {
 		return err
@@ -256,13 +289,12 @@ func saveToES(post *Post, index string, id string) error {
 	_, err = client.Index().
 		Index(index).
 		Id(id).
-		BodyJson(post).
+		BodyJson(i).
 		Do(context.Background())
 
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Post is saved to index : %s\n", post.Message)
 	return nil
 }
